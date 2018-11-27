@@ -31,8 +31,8 @@ cli_size = sizeof(cli_addr);
 
 // Creating the socket
 if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-								printf("server: can't open stream socket");
-								exit(0);
+	printf("server: can't open stream socket");
+	exit(0);
 }
 
 serv_addr.sin_family = AF_INET;
@@ -42,9 +42,9 @@ serv_addr.sin_port = htons(SERV_TCP_PORT);
 // Binding the port specified
 signal (SIGINT, slut);
 if (bind(sockfd, (struct sockaddr *) &serv_addr,
-									sizeof(serv_addr)) < 0) {
-								printf("server: can't bind local port\n");
-								exit(0);
+	sizeof(serv_addr)) < 0) {
+	printf("server: can't bind local port\n");
+	exit(0);
 }
 
 // listen(sockfd, 5);
