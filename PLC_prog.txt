@@ -1,0 +1,199 @@
+PROGRAM PLC_PRG
+
+VAR
+	///////////////////////////
+	// Inputs
+	///////////////////////////
+	
+	xBG20		AT %IX1.0	: BOOL;	// Stopper released
+	xBG21		AT %IX1.1	: BOOL;	// Carrier available
+	xBG22		AT %IX1.2	: BOOL;	// Carrier ID bit 0
+	xBG23		AT %IX1.3	: BOOL;	// Carrier ID bit 1
+	xBG24		AT %IX1.4	: BOOL;	// Carrier ID bit 2
+	xEmg		AT %IX0.0	: BOOL;	// Emergency stop
+	
+	///////////////////////////
+	// Outputs
+	///////////////////////////	
+	
+	xMB20		AT %QX1.0	: BOOL;	// Release stopper
+	xQA1_LEFT	AT %QX0.5	: BOOL;	// Conveyor to the left
+	xQA1_RIGHT	AT %QX0.4	: BOOL;	// Conveyor to the right
+	xQA1_SLOW	AT %QX0.6	: BOOL;	// Conveyor Slow
+	xQA1_STOP	AT %QX0.7	: BOOL;	// Conveyor Stop
+	
+		StateVar:INT:=0;
+		RFIDReader: dc_ecp.Dtm425;
+		DataSt: dc_ecp.st_CPF_RfidData;
+		ONo:UDINT;
+		OPos:UINT;
+		CarrierID: UINT;
+		swap: BYTE;
+		odd_ton : TON;
+		Stop_ton : TON;
+		
+	TCP:dc_ecp.TcpClientByteStream;
+	uiState:INT:=0;
+	data:BYTE;
+	timeout: TON;
+	trigger_timeout : BOOL := FALSE;
+	odd: BOOL := FALSE;
+	stopB: BOOL := FALSE;
+	temp_ID: UINT;
+		
+	state: INT := 0;
+	trigger_stopper: BOOL;
+
+	stage: BOOL := TRUE;
+
+	timer_TCP: TOF;
+	trigger_RFID: BOOL;
+	trigger_TCP: BOOL;
+	timer_RFID: TON;
+END_VAR
+
+//Turn on converybelt
+xQA1_RIGHT:=TRUE;
+
+//Wait until pallet ariv at the stopper
+IF xBG21 AND NOT timer_RFID.Q THEN
+CASE StateVar OF
+	0://Wait for RFID Reader is ready
+		IF RFIDReader.xReady THEN
+				StateVar := 1;
+		END_IF
+	1://Connect to RFID Reader
+		RFIDReader.Connect(usiNodeId:=32 , usiNetworkId:=0 , usiChannel:=1 );
+		StateVar := 2;
+	2://Wait for Connection
+		IF RFIDReader.xConnected THEN
+				StateVar := 3;
+		END_IF
+	3://Read the RFID TAG from pallet
+		//Start Timer for reading 0.5 sec
+		trigger_RFID:=TRUE;
+		IF xBG21 THEN
+		//	RFID.ReadTag(uiStartAddress := 0,uiDataLength := 100,ADR(Data) );
+			RFIDReader.ReadTag(uiStartAddress := 0, uiDataLength := SIZEOF(DataSt), ADR(DataSt) );
+			
+			StateVar := 4;
+		END_IF
+	
+			4://Correct data
+		IF RFIDReader.xReady THEN
+			CarrierID := dc_ecp.SwapWORD(DataSt.uiCarrierID);
+			ONo := dc_ecp.SwapDWORD(DataSt.stMesData.udiONo);
+			OPos := dc_ecp.SwapWORD(DataSt.stMesData.uiOPos);
+			StateVar := 3;
+		END_IF		
+	
+END_CASE
+RFIDReader();
+END_IF
+
+//Timers for state machine
+timer_RFID(IN:=trigger_RFID,PT:=T#0.5S);
+timer_TCP(IN:=trigger_TCP,PT:=T#0.5S);
+
+//TCP Connections / Sending data / Reading data
+//Wait until rfid tag have been read
+IF timer_RFID.Q AND NOT timer_TCP.Q THEN
+CASE uiState OF
+	
+	0://Reset connection
+		trigger_timeout:=FALSE;	
+		TCP.Reset();
+		uiState:=1;
+		
+	1://Wait for ready
+		trigger_timeout:=FALSE;
+		IF TCP.xReady THEN
+			uiState :=2;
+		END_IF
+	
+	2: //Connect
+		trigger_timeout:=FALSE;
+		TCP.Connect(sIP:='172.20.40.28',uiPort:=50000);
+		uistate:=3;
+		
+	3: //Wait for connection
+	trigger_timeout:=TRUE;
+	IF TCP.xReady THEN
+		uistate :=4;
+	END_IF
+	IF	timeout.Q THEN	//Timeout if TCP connection is lost
+		uistate :=0;
+	END_IF
+		
+	4: //send data
+	trigger_timeout:=FALSE;
+	TCP.Send(pToSend:=ADR(CarrierID),uiSizeToSend:=SIZEOF(CarrierID));
+	uistate:=5;
+	
+	5: //Wait for connection
+	trigger_timeout:=TRUE;
+	IF TCP.xReady THEN
+		uistate :=6;
+	END_IF
+		IF	timeout.Q THEN //Timeout if TCP connection is lost
+		uistate :=0;
+	END_IF
+	6: //receive data
+	trigger_timeout:=FALSE;
+	//Resiving data to deside if the rfid tag is odd or even
+	TCP.Receive(pToReceive:= ADR(data), uiSizeToReceive:= SIZEOF(data));
+	
+	trigger_TCP:=TRUE;
+	uistate:=0;
+
+END_CASE
+TCP();
+END_IF
+
+//Timeout timer if tcp losses connections
+timeout(IN:=trigger_timeout,PT:=T#0.5S);
+odd_ton(IN:=xBG21,PT:=T#0.5S);
+
+//If the rfid tag is odd dont do anything
+//If even release the stopper and letting the pallet go though
+CASE state OF
+	0: //converting byte to bool
+	odd := BYTE_TO_BOOL(data);
+	IF odd THEN // Is it a odd or even
+		state:=1;
+	END_IF
+	trigger_stopper :=FALSE;
+	
+	1:  //Releasing the stopper
+	xMB20:=TRUE;
+	state:=2;
+	trigger_stopper :=FALSE;
+	
+	
+	2:	// waiting 0.7 sec
+	trigger_stopper := TRUE;
+	IF Stop_ton.Q THEN
+		state:=3;
+	END_IF
+	
+	3: // Reset everyting
+	xMB20:=FALSE;
+	trigger_stopper :=FALSE;
+	odd:=FALSE;
+	data := 0;
+	state:=0;
+	trigger_RFID:= FALSE;
+	trigger_TCP:=FALSE;
+	
+END_CASE
+
+IF NOT xBG21 THEN //incase of error in the code reset everyting
+	xMB20:=FALSE;
+	trigger_stopper :=FALSE;
+	odd:=FALSE;
+	data := 0;
+	state:=0;
+	trigger_RFID:= FALSE;
+	trigger_TCP:=FALSE;
+END_IF 
+Stop_ton(IN:=trigger_stopper,PT:=T#0.7S);
