@@ -53,8 +53,7 @@ int main(int argc, char *argv[]) {
 																// Listening for any communication on the port
 																listen(sockfd, 5);
 																// accepting and saving the connection
-																newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr,
-																																			&cli_size);
+																newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr,&cli_size);
 																// creating a new thread to manage the connection
 																if (!(childpid = fork())) {
 																								close(sockfd);
@@ -79,7 +78,6 @@ int main(int argc, char *argv[]) {
 																								exit(0);
 																}
 																close(newsockfd);
-
 								}
 
 }
