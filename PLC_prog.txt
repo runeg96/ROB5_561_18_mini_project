@@ -97,7 +97,7 @@ timer_TCP(IN:=trigger_TCP,PT:=T#0.5S);
 
 //TCP Connections / Sending data / Reading data
 //Wait until rfid tag have been read
-IF timer_RFID.Q AND NOT timer_TCP.Q THEN
+IF timer_RFID.Q THEN
 CASE uiState OF
 	
 	0://Reset connection
